@@ -1458,3 +1458,97 @@ json_value_t *json_array_remove(const json_value_t *val,
 	return (json_value_t *)val;
 }
 
+const json_value_t *json_array_at(const json_array_t *arr, size_t index)
+{
+    const json_value_t *it = NULL;
+    size_t i = 0;
+    json_array_for_each(it, arr) {
+        if (i == index) return it;
+        ++i;
+    }
+    return NULL;
+}
+
+static const json_value_t *__json_array_insert_from_existing(const json_value_t *src,
+                                                             struct list_head *pos,
+                                                             json_array_t *arr)
+{
+    json_element_t *elem = (json_element_t *)malloc(sizeof(json_element_t));
+    if (!elem) return NULL;
+    if (__copy_json_value(src, &elem->value) < 0) {
+        free(elem);
+        return NULL;
+    }
+    list_add(&elem->list, pos);
+    arr->size++;
+    return &elem->value;
+}
+
+const json_value_t *json_array_insert_from_value(json_array_t *arr, size_t index, const json_value_t *src)
+{
+    struct list_head *pos = &arr->head;
+    size_t size = arr->size;
+    if (index >= size) {
+        // append at end
+        return __json_array_insert_from_existing(src, arr->head.prev, arr);
+    }
+    // find node currently at index, insert before it
+    const json_value_t *at = json_array_at(arr, index);
+    if (!at) return NULL;
+    pos = &list_entry(at, json_element_t, value)->list;
+    return __json_array_insert_from_existing(src, pos->prev, arr);
+}
+
+const json_value_t *json_array_replace_from_value(json_array_t *arr, size_t index, const json_value_t *src)
+{
+    const json_value_t *at = json_array_at(arr, index);
+    if (!at) return NULL;
+    // insert after current, then remove old
+    const json_value_t *newv = json_array_insert_from_value(arr, index + 1, src);
+    if (!newv) return NULL;
+    json_array_remove(at, arr);
+    return newv;
+}
+
+json_value_t *json_array_remove_at(json_array_t *arr, size_t index)
+{
+    const json_value_t *at = json_array_at(arr, index);
+    if (!at) return NULL;
+    return json_array_remove(at, arr);
+}
+
+int json_object_remove_by_key(json_object_t *obj, const char *name)
+{
+    const json_value_t *v = json_object_find(name, obj);
+    if (!v) return 0;
+    json_value_t *moved = json_object_remove(v, obj);
+    if (moved) {
+        json_value_destroy(moved);
+        return 1;
+    }
+    return -1;
+}
+
+const json_value_t *json_object_set_from_value(json_object_t *obj, const char *name, const json_value_t *src)
+{
+    // if exists, remove first
+    const json_value_t *existing = json_object_find(name, obj);
+    if (existing) {
+        json_value_t *removed = json_object_remove(existing, obj);
+        if (removed) json_value_destroy(removed);
+    }
+    // insert copy
+    json_member_t *memb;
+    size_t len = strlen(name);
+    memb = (json_member_t *)malloc(offsetof(json_member_t, name) + len + 1);
+    if (!memb) return NULL;
+    memcpy(memb->name, name, len + 1);
+    if (__copy_json_value(src, &memb->value) < 0) {
+        free(memb);
+        return NULL;
+    }
+    list_add(&memb->list, obj->head.prev);
+    obj->size++;
+    return &memb->value;
+}
+

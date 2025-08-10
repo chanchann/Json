@@ -74,6 +74,15 @@ const json_value_t *json_array_insert_before(const json_value_t *val,
 json_value_t *json_array_remove(const json_value_t *val,
 								json_array_t *arr);
 
+// New utility APIs for direct indexed operations and setting from existing values
+const json_value_t *json_array_at(const json_array_t *arr, size_t index);
+const json_value_t *json_array_insert_from_value(json_array_t *arr, size_t index, const json_value_t *src);
+const json_value_t *json_array_replace_from_value(json_array_t *arr, size_t index, const json_value_t *src);
+json_value_t *json_array_remove_at(json_array_t *arr, size_t index);
+
+const json_value_t *json_object_set_from_value(json_object_t *obj, const char *name, const json_value_t *src);
+int json_object_remove_by_key(json_object_t *obj, const char *name);
+
 #ifdef __cplusplus
 }
 #endif

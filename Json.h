@@ -156,6 +156,12 @@ public:
     JsonProxy operator[](size_t index);
     JsonProxy operator[](int index);
 
+    // Const read-only overloads (no auto-vivification)
+    Json operator[](const char* key) const;
+    Json operator[](const std::string& key) const;
+    Json operator[](size_t index) const;
+    Json operator[](int index) const;
+
     // *******************************************************************
     // Modification & Chaining
     // *******************************************************************
@@ -300,17 +306,8 @@ public:
         if (!is_array()) return *this;
         json_array_t* arr = json_value_array(m_value);
         if (index >= json_array_size(arr)) return *this;
-        
-        const json_value_t* target = NULL;
-        const json_value_t* it = NULL;
-        size_t current_idx = 0;
-        json_array_for_each(it, arr) {
-            if (current_idx == index) { target = it; break; }
-            ++current_idx;
-        }
-        if (target) {
-            json_array_remove(target, arr);
-        }
+        json_value_t* removed = json_array_remove_at(arr, index);
+        if (removed) json_value_destroy(removed);
         return *this;
     }
 
@@ -460,6 +457,86 @@ private:
         }
     }
 
+    // Ensure object has key with container type; replace if exists with wrong type.
+    // Returns pointer to the ensured child value inside the object.
+    const json_value_t* ensure_object_key_container(json_object_t* obj, const char* key, int container_type) {
+        const json_value_t* existing = json_object_find(key, obj);
+        if (existing && json_value_type(existing) == container_type) {
+            return existing;
+        }
+        if (existing) {
+            json_object_remove(existing, obj);
+        }
+        return json_object_append(obj, key, container_type);
+    }
+
+    // Ensure array has index with container type; creates/extends as needed and
+    // replaces element if in-bounds but wrong type. Returns pointer to the child value.
+    const json_value_t* ensure_array_index_container(json_array_t* arr, size_t index, int container_type) {
+        size_t size = json_array_size(arr);
+        if (index >= size) {
+            while (json_array_size(arr) < index) {
+                json_array_append(arr, JSON_VALUE_NULL);
+            }
+            return json_array_append(arr, container_type);
+        }
+        // In-bounds
+        std::vector<const json_value_t*> element_ptrs;
+        element_ptrs.reserve(size);
+        const json_value_t* it = NULL;
+        json_array_for_each(it, arr) {
+            element_ptrs.push_back(it);
+        }
+        const json_value_t* target = element_ptrs[index];
+        if (json_value_type(target) == container_type) {
+            return target;
+        }
+        // Replace target with requested container, rebuild tail
+        std::vector<Json> tail_copies;
+        for (size_t i = index + 1; i < element_ptrs.size(); ++i) {
+            tail_copies.emplace_back(Json(json_value_copy(element_ptrs[i])));
+        }
+        for (size_t i = element_ptrs.size(); i-- > index + 1; ) {
+            json_array_remove(element_ptrs[i], arr);
+        }
+        json_array_remove(target, arr);
+        const json_value_t* new_child = json_array_append(arr, container_type);
+        for (const auto& tail_elem : tail_copies) {
+            append_deep_copy_json_to_array(arr, tail_elem);
+        }
+        return new_child;
+    }
+
+    // Replace array element at index with deep-copied Json newElem. Extends if needed.
+    void replace_array_element_with_json(json_array_t* arr, size_t index, const Json& newElem) {
+        size_t size = json_array_size(arr);
+        if (index >= size) {
+            while (json_array_size(arr) < index) {
+                json_array_append(arr, JSON_VALUE_NULL);
+            }
+            append_deep_copy_json_to_array(arr, newElem);
+            return;
+        }
+        std::vector<const json_value_t*> element_ptrs;
+        element_ptrs.reserve(size);
+        const json_value_t* it = NULL;
+        json_array_for_each(it, arr) {
+            element_ptrs.push_back(it);
+        }
+        std::vector<Json> tail_copies;
+        for (size_t i = index + 1; i < element_ptrs.size(); ++i) {
+            tail_copies.emplace_back(Json(json_value_copy(element_ptrs[i])));
+        }
+        for (size_t i = element_ptrs.size(); i-- > index + 1; ) {
+            json_array_remove(element_ptrs[i], arr);
+        }
+        json_array_remove(element_ptrs[index], arr);
+        append_deep_copy_json_to_array(arr, newElem);
+        for (const auto& tail_elem : tail_copies) {
+            append_deep_copy_json_to_array(arr, tail_elem);
+        }
+    }
+ 
     static void append_escaped_string(std::stringstream& ss, const char* s) {
         if (!s) {
             return;
@@ -599,7 +676,7 @@ public:
     template<typename T>
     JsonProxy& operator=(T value) {
         Json j_value(value);
-        set_value_at_path(j_value);
+        set_value_inplace(j_value);
         return *this;
     }
     
@@ -675,6 +752,87 @@ private:
         set_value_rec(m_parent, 0, newValue);
     }
 
+    // In-place setter using C API to avoid deep copies along the path
+    void set_value_inplace(const Json& newValue) {
+        if (m_path.empty()) {
+            m_parent = newValue;
+            return;
+        }
+        json_value_t* cur = m_parent.m_value;
+        for (size_t depth = 0; depth < m_path.size(); ++depth) {
+            const PathSegment& seg = m_path[depth];
+            const bool is_last = (depth + 1 == m_path.size());
+            if (seg.is_index) {
+                // Ensure current is an array (auto-vivify if root is null)
+                if (!cur || json_value_type(cur) != JSON_VALUE_ARRAY) {
+                    if (depth == 0) {
+                        if (m_parent.m_value) json_value_destroy(m_parent.m_value);
+                        m_parent.m_value = json_value_create(JSON_VALUE_ARRAY, NULL);
+                        cur = m_parent.m_value;
+                    } else {
+                        throw std::runtime_error("Path segment expects array but current is not array");
+                    }
+                }
+                json_array_t* arr = json_value_array(cur);
+                if (is_last) {
+                    size_t size = json_array_size(arr);
+                    if (seg.index >= size) {
+                        while (json_array_size(arr) < seg.index) {
+                            json_array_append(arr, JSON_VALUE_NULL);
+                        }
+                        m_parent.append_deep_copy_json_to_array(arr, newValue);
+                    } else {
+                        json_array_replace_from_value(arr, seg.index, newValue.get_c_value());
+                    }
+                    return;
+                }
+                const PathSegment& nextSeg = m_path[depth + 1];
+                int child_type = nextSeg.is_index ? JSON_VALUE_ARRAY : JSON_VALUE_OBJECT;
+                // ensure child in array at seg.index
+                size_t size2 = json_array_size(arr);
+                if (seg.index >= size2) {
+                    while (json_array_size(arr) < seg.index) {
+                        json_array_append(arr, JSON_VALUE_NULL);
+                    }
+                    json_array_append(arr, child_type);
+                    cur = const_cast<json_value_t*>(json_array_at(arr, seg.index));
+                } else {
+                    const json_value_t* existing = json_array_at(arr, seg.index);
+                    if (json_value_type(existing) != child_type) {
+                        json_array_replace_from_value(arr, seg.index, json_value_create(child_type, NULL));
+                        // After replace, fetch again
+                        existing = json_array_at(arr, seg.index);
+                    }
+                    cur = const_cast<json_value_t*>(existing);
+                }
+            } else {
+                // Object path segment
+                if (!cur || json_value_type(cur) != JSON_VALUE_OBJECT) {
+                    if (depth == 0) {
+                        if (m_parent.m_value) json_value_destroy(m_parent.m_value);
+                        m_parent.m_value = json_value_create(JSON_VALUE_OBJECT, NULL);
+                        cur = m_parent.m_value;
+                    } else {
+                        throw std::runtime_error("Path segment expects object but current is not object");
+                    }
+                }
+                json_object_t* obj = json_value_object(cur);
+                if (is_last) {
+                    json_object_set_from_value(obj, seg.key.c_str(), newValue.get_c_value());
+                    return;
+                }
+                const PathSegment& nextSeg = m_path[depth + 1];
+                int child_type = nextSeg.is_index ? JSON_VALUE_ARRAY : JSON_VALUE_OBJECT;
+                const json_value_t* ex = json_object_find(seg.key.c_str(), obj);
+                if (!ex || json_value_type(ex) != child_type) {
+                    json_object_set_from_value(obj, seg.key.c_str(), json_value_create(child_type, NULL));
+                    ex = json_object_find(seg.key.c_str(), obj);
+                }
+                cur = const_cast<json_value_t*>(ex);
+            }
+        }
+    }
+
     void set_value_rec(Json& current, size_t depth, const Json& newValue) {
         if (depth >= m_path.size()) {
             // Replace current entirely
@@ -746,44 +904,15 @@ private:
             }
         }
         json_array_t* arr = json_value_array(arrayOwner.get_c_value());
-
-        size_t current_size = json_array_size(arr);
-        if (targetIndex >= current_size) {
+        size_t size = json_array_size(arr);
+        if (targetIndex >= size) {
             while (json_array_size(arr) < targetIndex) {
                 json_array_append(arr, JSON_VALUE_NULL);
             }
+            // append newElem as copy
             m_parent.append_deep_copy_json_to_array(arr, newElem);
-            return;
-        }
-
-        // In-bounds replacement: rebuild only the tail
-        std::vector<const json_value_t*> element_ptrs;
-        element_ptrs.reserve(current_size);
-        const json_value_t* it = NULL;
-        json_array_for_each(it, arr) {
-            element_ptrs.push_back(it);
-        }
-
-        // Deep copy the tail elements (after targetIndex)
-        std::vector<Json> tail_copies;
-        tail_copies.reserve(current_size - targetIndex - 1);
-        for (size_t i = targetIndex + 1; i < element_ptrs.size(); ++i) {
-            tail_copies.emplace_back(Json(json_value_copy(element_ptrs[i])));
-        }
-
-        // Remove the tail from end to beginning
-        for (size_t i = element_ptrs.size(); i-- > targetIndex + 1; ) {
-            json_array_remove(element_ptrs[i], arr);
-        }
-        // Remove the target element
-        json_array_remove(element_ptrs[targetIndex], arr);
-
-        // Append the new element
-        m_parent.append_deep_copy_json_to_array(arr, newElem);
-
-        // Re-append the saved tail elements in original order
-        for (const auto& elem_json : tail_copies) {
-            m_parent.append_deep_copy_json_to_array(arr, elem_json);
+        } else {
+            json_array_replace_from_value(arr, targetIndex, newElem.get_c_value());
         }
     }
 };
@@ -829,6 +958,27 @@ inline JsonProxy Json::operator[](size_t index) {
 inline JsonProxy Json::operator[](int index) {
     return (*this)[static_cast<size_t>(index)];
 }
+
+// Const operator[] for read-only access without auto-vivification
+inline Json Json::operator[](const char* key) const {
+    const json_value_t* cur = get_c_value();
+    if (!cur || json_value_type(cur) != JSON_VALUE_OBJECT) return Json();
+    const json_object_t* obj = json_value_object(cur);
+    const json_value_t* v = json_object_find(key, obj);
+    return v ? Json(json_value_copy(v)) : Json();
+}
+
+inline Json Json::operator[](const std::string& key) const { return (*this)[key.c_str()]; }
+
+inline Json Json::operator[](size_t index) const {
+    const json_value_t* cur = get_c_value();
+    if (!cur || json_value_type(cur) != JSON_VALUE_ARRAY) return Json();
+    const json_array_t* arr = json_value_array(cur);
+    const json_value_t* v = json_array_at(arr, index);
+    return v ? Json(json_value_copy(v)) : Json();
+}
+
+inline Json Json::operator[](int index) const { return (*this)[static_cast<size_t>(index)]; }
 
 
 #endif // JSON_H
