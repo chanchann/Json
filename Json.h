@@ -301,14 +301,15 @@ public:
         json_array_t* arr = json_value_array(m_value);
         if (index >= json_array_size(arr)) return *this;
         
-        const json_value_t* val = NULL;
+        const json_value_t* target = NULL;
+        const json_value_t* it = NULL;
         size_t current_idx = 0;
-        json_array_for_each(val, arr) {
-            if (current_idx == index) {
-                json_array_remove(val, arr);
-                break;
-            }
-            current_idx++;
+        json_array_for_each(it, arr) {
+            if (current_idx == index) { target = it; break; }
+            ++current_idx;
+        }
+        if (target) {
+            json_array_remove(target, arr);
         }
         return *this;
     }
@@ -411,6 +412,48 @@ private:
                 const json_object_t* src_obj = json_value_object(src_val);
                 json_object_for_each(name, v, src_obj) {
                     append_deep_copy_to_object(child_obj, name, v);
+                }
+                break;
+            }
+        }
+    }
+
+    // Append a deep copy of a Json wrapper value to a C array
+    void append_deep_copy_json_to_array(json_array_t* dest_arr, const Json& elem) const {
+        switch (elem.type()) {
+            case JSON_VALUE_STRING:
+                json_array_append(dest_arr, JSON_VALUE_STRING, json_value_string(elem.get_c_value()));
+                break;
+            case JSON_VALUE_NUMBER:
+                json_array_append(dest_arr, JSON_VALUE_NUMBER, json_value_number(elem.get_c_value()));
+                break;
+            case JSON_VALUE_TRUE:
+                json_array_append(dest_arr, JSON_VALUE_TRUE);
+                break;
+            case JSON_VALUE_FALSE:
+                json_array_append(dest_arr, JSON_VALUE_FALSE);
+                break;
+            case JSON_VALUE_NULL:
+                json_array_append(dest_arr, JSON_VALUE_NULL);
+                break;
+            case JSON_VALUE_OBJECT: {
+                const json_value_t* new_val = json_array_append(dest_arr, JSON_VALUE_OBJECT);
+                json_object_t* dest_obj = json_value_object(new_val);
+                const char* name = NULL;
+                const json_value_t* src_val = NULL;
+                json_object_t* src_obj = json_value_object(elem.get_c_value());
+                json_object_for_each(name, src_val, src_obj) {
+                    append_deep_copy_to_object(dest_obj, name, src_val);
+                }
+                break;
+            }
+            case JSON_VALUE_ARRAY: {
+                const json_value_t* new_val = json_array_append(dest_arr, JSON_VALUE_ARRAY);
+                json_array_t* dest_child_arr = json_value_array(new_val);
+                const json_value_t* src_elem = NULL;
+                json_array_t* src_arr = json_value_array(elem.get_c_value());
+                json_array_for_each(src_elem, src_arr) {
+                    append_deep_copy_to_array(dest_child_arr, src_elem);
                 }
                 break;
             }
@@ -703,74 +746,44 @@ private:
             }
         }
         json_array_t* arr = json_value_array(arrayOwner.get_c_value());
-        // Extend with nulls if needed
-        while (json_array_size(arr) <= targetIndex) {
-            json_array_append(arr, JSON_VALUE_NULL);
-        }
-        // Collect all existing values
-        std::vector<const json_value_t*> raw_elements;
-        const json_value_t* val = NULL;
-        json_array_for_each(val, arr) {
-            raw_elements.push_back(val);
-        }
-        // Build vector of Json elements as deep copies, then replace target
-        std::vector<Json> elements;
-        elements.reserve(raw_elements.size());
-        for (size_t i = 0; i < raw_elements.size(); ++i) {
-            if (i == targetIndex) {
-                elements.push_back(newElem);
-            } else {
-                elements.emplace_back(Json(json_value_copy(raw_elements[i])));
+
+        size_t current_size = json_array_size(arr);
+        if (targetIndex >= current_size) {
+            while (json_array_size(arr) < targetIndex) {
+                json_array_append(arr, JSON_VALUE_NULL);
             }
+            m_parent.append_deep_copy_json_to_array(arr, newElem);
+            return;
         }
-        // Clear the array
-        while (json_array_size(arr) > 0) {
-            const json_value_t* first = NULL;
-            json_array_for_each(first, arr) {
-                json_array_remove(first, arr);
-                break;
-            }
+
+        // In-bounds replacement: rebuild only the tail
+        std::vector<const json_value_t*> element_ptrs;
+        element_ptrs.reserve(current_size);
+        const json_value_t* it = NULL;
+        json_array_for_each(it, arr) {
+            element_ptrs.push_back(it);
         }
-        // Append elements back with deep copy
-        for (const auto& elem : elements) {
-            switch (elem.type()) {
-                case JSON_VALUE_STRING:
-                    json_array_append(arr, JSON_VALUE_STRING, json_value_string(elem.get_c_value()));
-                    break;
-                case JSON_VALUE_NUMBER:
-                    json_array_append(arr, JSON_VALUE_NUMBER, json_value_number(elem.get_c_value()));
-                    break;
-                case JSON_VALUE_TRUE:
-                    json_array_append(arr, JSON_VALUE_TRUE);
-                    break;
-                case JSON_VALUE_FALSE:
-                    json_array_append(arr, JSON_VALUE_FALSE);
-                    break;
-                case JSON_VALUE_NULL:
-                    json_array_append(arr, JSON_VALUE_NULL);
-                    break;
-                case JSON_VALUE_OBJECT: {
-                    const json_value_t* new_val = json_array_append(arr, JSON_VALUE_OBJECT);
-                    json_object_t* dest_obj = json_value_object(new_val);
-                    const char* name = NULL;
-                    const json_value_t* src_val = NULL;
-                    json_object_t* src_obj = json_value_object(elem.get_c_value());
-                    json_object_for_each(name, src_val, src_obj) {
-                        m_parent.append_deep_copy_to_object(dest_obj, name, src_val);
-                    }
-                    break;
-                }
-                case JSON_VALUE_ARRAY: {
-                    const json_value_t* new_val = json_array_append(arr, JSON_VALUE_ARRAY);
-                    json_array_t* dest_arr = json_value_array(new_val);
-                    const json_value_t* src_elem = NULL;
-                    json_array_t* src_arr = json_value_array(elem.get_c_value());
-                    json_array_for_each(src_elem, src_arr) {
-                        m_parent.append_deep_copy_to_array(dest_arr, src_elem);
-                    }
-                    break;
-                }
-            }
+
+        // Deep copy the tail elements (after targetIndex)
+        std::vector<Json> tail_copies;
+        tail_copies.reserve(current_size - targetIndex - 1);
+        for (size_t i = targetIndex + 1; i < element_ptrs.size(); ++i) {
+            tail_copies.emplace_back(Json(json_value_copy(element_ptrs[i])));
+        }
+
+        // Remove the tail from end to beginning
+        for (size_t i = element_ptrs.size(); i-- > targetIndex + 1; ) {
+            json_array_remove(element_ptrs[i], arr);
+        }
+        // Remove the target element
+        json_array_remove(element_ptrs[targetIndex], arr);
+
+        // Append the new element
+        m_parent.append_deep_copy_json_to_array(arr, newElem);
+
+        // Re-append the saved tail elements in original order
+        for (const auto& elem_json : tail_copies) {
+            m_parent.append_deep_copy_json_to_array(arr, elem_json);
         }
     }
 };
