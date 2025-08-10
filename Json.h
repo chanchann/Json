@@ -497,6 +497,7 @@ private:
 
     Json& m_parent;
     std::vector<PathSegment> m_path;
+    JsonProxy(Json& parent, std::vector<PathSegment> path) : m_parent(parent), m_path(std::move(path)) {}
 
 public:
     JsonProxy(Json& parent, const char* key) : m_parent(parent) {
@@ -519,18 +520,16 @@ public:
     // Chained access: obj["key1"]["key2"]
     JsonProxy operator[](const char* key) {
         PathSegment seg{false, std::string(key), 0};
-        JsonProxy next(m_parent, "");
-        next.m_path = m_path;
-        next.m_path.push_back(std::move(seg));
-        return next;
+        std::vector<PathSegment> new_path = m_path;
+        new_path.push_back(std::move(seg));
+        return JsonProxy(m_parent, std::move(new_path));
     }
 
     JsonProxy operator[](size_t index) {
         PathSegment seg{true, std::string(), index};
-        JsonProxy next(m_parent, "");
-        next.m_path = m_path;
-        next.m_path.push_back(std::move(seg));
-        return next;
+        std::vector<PathSegment> new_path = m_path;
+        new_path.push_back(std::move(seg));
+        return JsonProxy(m_parent, std::move(new_path));
     }
     
     JsonProxy operator[](int index) {
@@ -607,7 +606,7 @@ private:
                         while (json_array_size(arr) < seg.index) {
                             json_array_append(arr, JSON_VALUE_NULL);
                         }
-                        m_parent.append_deep_copy_json_to_array(arr, newValue);
+                        json_array_insert_from_value(arr, json_array_size(arr), newValue.get_c_value());
                     } else {
                         json_array_replace_from_value(arr, seg.index, newValue.get_c_value());
                     }
