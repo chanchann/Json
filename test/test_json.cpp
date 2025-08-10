@@ -38,6 +38,7 @@ void test_dump_escaping();
 void test_move_semantics();
 void test_missing_reads();
 void test_proxy_conversion_copy();
+void test_nonconst_operator_no_autovivify();
 
 int main() {
     std::cout << "Running C++ JSON Wrapper Tests..." << std::endl;
@@ -57,6 +58,7 @@ int main() {
     test("Move Semantics", test_move_semantics);
     test("Missing Reads Behavior", test_missing_reads);
     test("Proxy Conversion Yields Copy", test_proxy_conversion_copy);
+    test("Non-const operator[] no auto-vivify on read-only", test_nonconst_operator_no_autovivify);
     test("Edge Cases", test_edge_cases);
 
     std::cout << "\nAll tests passed successfully!" << std::endl;
@@ -352,6 +354,31 @@ void test_proxy_conversion_copy() {
     Json copy = j["x"]; // copy should be detached
     copy["y"] = 2;
     assert(j["x"]["y"].get<int>() == 1);
+}
+
+void test_nonconst_operator_no_autovivify() {
+    // Case 1: root is null, accessing by key should not mutate
+    Json j;
+    (void)j["a"]; // create proxy only
+    assert(j.is_null());
+    (void)static_cast<Json>(j["a"]);
+    assert(j.is_null());
+    (void)j["a"].is_null();
+    assert(j.is_null());
+
+    // Case 2: object without key should not get a new null member on read-only access
+    Json obj = Json::object();
+    (void)obj["missing"]; // read-like
+    assert(obj.dump() == "{}");
+    (void)static_cast<Json>(obj["missing"]);
+    assert(obj.dump() == "{}");
+
+    // Case 3: array read of out-of-bounds index should not extend array
+    Json arr = Json::array();
+    (void)arr[3];
+    assert(arr.dump() == "[]");
+    (void)static_cast<Json>(arr[3]);
+    assert(arr.dump() == "[]");
 }
 
 void test_edge_cases() {

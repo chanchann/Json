@@ -1503,10 +1503,11 @@ const json_value_t *json_array_replace_from_value(json_array_t *arr, size_t inde
 {
     const json_value_t *at = json_array_at(arr, index);
     if (!at) return NULL;
-    // insert after current, then remove old
+    // insert after current, then remove old and destroy it to avoid leaks
     const json_value_t *newv = json_array_insert_from_value(arr, index + 1, src);
     if (!newv) return NULL;
-    json_array_remove(at, arr);
+    json_value_t* removed = json_array_remove(at, arr);
+    if (removed) json_value_destroy(removed);
     return newv;
 }
 
