@@ -4,6 +4,7 @@
 #include <vector>
 #include <cmath> // For std::abs
 #include <utility>
+#include <stdexcept>
 
 #include "../Json.h"
 
@@ -39,6 +40,7 @@ void test_move_semantics();
 void test_missing_reads();
 void test_proxy_conversion_copy();
 void test_nonconst_operator_no_autovivify();
+void test_negative_index_behavior();
 
 int main() {
     std::cout << "Running C++ JSON Wrapper Tests..." << std::endl;
@@ -59,6 +61,7 @@ int main() {
     test("Missing Reads Behavior", test_missing_reads);
     test("Proxy Conversion Yields Copy", test_proxy_conversion_copy);
     test("Non-const operator[] no auto-vivify on read-only", test_nonconst_operator_no_autovivify);
+    test("Negative index behavior", test_negative_index_behavior);
     test("Edge Cases", test_edge_cases);
 
     std::cout << "\nAll tests passed successfully!" << std::endl;
@@ -379,6 +382,34 @@ void test_nonconst_operator_no_autovivify() {
     assert(arr.dump() == "[]");
     (void)static_cast<Json>(arr[3]);
     assert(arr.dump() == "[]");
+}
+
+void test_negative_index_behavior() {
+    // Write path: negative index should throw
+    Json arr = Json::array();
+    bool threw = false;
+    try {
+        arr[-1] = 1; // should throw
+    } catch (const std::out_of_range&) {
+        threw = true;
+    }
+    assert(threw);
+
+    // Read path: negative index on const should yield null Json and not mutate
+    const Json& carr = arr;
+    Json val = carr[-5];
+    assert(val.is_null());
+    assert(arr.dump() == "[]");
+
+    // Chained write with negative index should throw
+    Json root;
+    threw = false;
+    try {
+        root["a"][-2] = 42;
+    } catch (const std::out_of_range&) {
+        threw = true;
+    }
+    assert(threw);
 }
 
 void test_edge_cases() {

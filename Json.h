@@ -534,6 +534,7 @@ public:
     }
     
     JsonProxy operator[](int index) {
+        if (index < 0) throw std::out_of_range("negative index");
         return (*this)[static_cast<size_t>(index)];
     }
 
@@ -625,10 +626,12 @@ private:
                 } else {
                     const json_value_t* existing = json_array_at(arr, seg.index);
                     if (json_value_type(existing) != child_type) {
-                        // Insert the correct container before existing, then remove existing
-                        const json_value_t* inserted = json_array_insert_before(existing, arr, child_type);
-                        json_value_t* removed_old = json_array_remove(existing, arr);
+                        // Replace by index: remove at index, then insert new container at same index
+                        json_value_t* removed_old = json_array_remove_at(arr, seg.index);
                         if (removed_old) json_value_destroy(removed_old);
+                        json_value_t* tmp_child = json_value_create(child_type, NULL);
+                        const json_value_t* inserted = json_array_insert_from_value(arr, seg.index, tmp_child);
+                        json_value_destroy(tmp_child);
                         existing = inserted;
                     }
                     cur = const_cast<json_value_t*>(existing);
@@ -693,6 +696,7 @@ inline JsonProxy Json::operator[](size_t index) {
 }
 
 inline JsonProxy Json::operator[](int index) {
+    if (index < 0) throw std::out_of_range("negative index");
     return (*this)[static_cast<size_t>(index)];
 }
 
@@ -715,7 +719,7 @@ inline Json Json::operator[](size_t index) const {
     return v ? Json(json_value_copy(v)) : Json();
 }
 
-inline Json Json::operator[](int index) const { return (*this)[static_cast<size_t>(index)]; }
+inline Json Json::operator[](int index) const { if (index < 0) return Json(); return (*this)[static_cast<size_t>(index)]; }
 
 
 #endif // JSON_H
