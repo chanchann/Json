@@ -799,7 +799,9 @@ private:
                 } else {
                     const json_value_t* existing = json_array_at(arr, seg.index);
                     if (json_value_type(existing) != child_type) {
-                        json_array_replace_from_value(arr, seg.index, json_value_create(child_type, NULL));
+                        json_value_t* tmp_child = json_value_create(child_type, NULL);
+                        json_array_replace_from_value(arr, seg.index, tmp_child);
+                        json_value_destroy(tmp_child);
                         // After replace, fetch again
                         existing = json_array_at(arr, seg.index);
                     }
@@ -825,7 +827,9 @@ private:
                 int child_type = nextSeg.is_index ? JSON_VALUE_ARRAY : JSON_VALUE_OBJECT;
                 const json_value_t* ex = json_object_find(seg.key.c_str(), obj);
                 if (!ex || json_value_type(ex) != child_type) {
-                    json_object_set_from_value(obj, seg.key.c_str(), json_value_create(child_type, NULL));
+                    json_value_t* tmp_child = json_value_create(child_type, NULL);
+                    json_object_set_from_value(obj, seg.key.c_str(), tmp_child);
+                    json_value_destroy(tmp_child);
                     ex = json_object_find(seg.key.c_str(), obj);
                 }
                 cur = const_cast<json_value_t*>(ex);
