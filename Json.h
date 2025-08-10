@@ -152,16 +152,22 @@ public:
     // Nested Access (operator[])
     // *******************************************************************
     
-    JsonProxy operator[](const char* key);
-    JsonProxy operator[](const std::string& key);
-    JsonProxy operator[](size_t index);
-    JsonProxy operator[](int index);
+    JsonProxy operator[](const char* key) &;
+    JsonProxy operator[](const std::string& key) &;
+    JsonProxy operator[](size_t index) &;
+    JsonProxy operator[](int index) &;
 
     // Const read-only overloads (no auto-vivification)
-    Json operator[](const char* key) const;
-    Json operator[](const std::string& key) const;
-    Json operator[](size_t index) const;
-    Json operator[](int index) const;
+    Json operator[](const char* key) const &;
+    Json operator[](const std::string& key) const &;
+    Json operator[](size_t index) const &;
+    Json operator[](int index) const &;
+
+    // Disallow read-only operator[] on rvalues as well
+    Json operator[](const char* key) const && = delete;
+    Json operator[](const std::string& key) const && = delete;
+    Json operator[](size_t index) const && = delete;
+    Json operator[](int index) const && = delete;
 
     // *******************************************************************
     // Modification & Chaining
@@ -181,6 +187,12 @@ public:
         
         Json j_value(value);
         json_object_t* obj = json_value_object(m_value);
+        // Remove existing value (if any) to avoid leaks before setting new one
+        const json_value_t* existing = json_object_find(key.c_str(), obj);
+        if (existing) {
+            json_value_t* removed = json_object_remove(existing, obj);
+            if (removed) json_value_destroy(removed);
+        }
         json_object_set_from_value(obj, key.c_str(), j_value.get_c_value());
         return *this;
     }
@@ -606,9 +618,13 @@ private:
                         while (json_array_size(arr) < seg.index) {
                             json_array_append(arr, JSON_VALUE_NULL);
                         }
-                        json_array_insert_from_value(arr, json_array_size(arr), newValue.get_c_value());
+                        // Insert at the requested index (which equals current size)
+                        json_array_insert_from_value(arr, seg.index, newValue.get_c_value());
                     } else {
-                        json_array_replace_from_value(arr, seg.index, newValue.get_c_value());
+                        // Remove old value to avoid leaks, then insert new value at same index
+                        json_value_t* removed = json_array_remove_at(arr, seg.index);
+                        if (removed) json_value_destroy(removed);
+                        json_array_insert_from_value(arr, seg.index, newValue.get_c_value());
                     }
                     return;
                 }
@@ -648,6 +664,12 @@ private:
                 }
                 json_object_t* obj = json_value_object(cur);
                 if (is_last) {
+                    // Remove existing value (if any) to avoid leaks before setting new one
+                    const json_value_t* existing = json_object_find(seg.key.c_str(), obj);
+                    if (existing) {
+                        json_value_t* removed = json_object_remove(existing, obj);
+                        if (removed) json_value_destroy(removed);
+                    }
                     json_object_set_from_value(obj, seg.key.c_str(), newValue.get_c_value());
                     return;
                 }
@@ -674,7 +696,7 @@ private:
 // Json method implementations that depend on JsonProxy
 // *******************************************************************
 
-inline JsonProxy Json::operator[](const char* key) {
+inline JsonProxy Json::operator[](const char* key) & {
     if (is_null()) {
         return JsonProxy(*this, key);
     }
@@ -682,11 +704,11 @@ inline JsonProxy Json::operator[](const char* key) {
     return JsonProxy(*this, key);
 }
 
-inline JsonProxy Json::operator[](const std::string& key) {
+inline JsonProxy Json::operator[](const std::string& key) & {
     return (*this)[key.c_str()];
 }
 
-inline JsonProxy Json::operator[](size_t index) {
+inline JsonProxy Json::operator[](size_t index) & {
     if (is_null()) {
         return JsonProxy(*this, index);
     }
@@ -694,13 +716,13 @@ inline JsonProxy Json::operator[](size_t index) {
     return JsonProxy(*this, index);
 }
 
-inline JsonProxy Json::operator[](int index) {
+inline JsonProxy Json::operator[](int index) & {
     if (index < 0) throw std::out_of_range("negative index");
     return (*this)[static_cast<size_t>(index)];
 }
 
 // Const operator[] for read-only access without auto-vivification
-inline Json Json::operator[](const char* key) const {
+inline Json Json::operator[](const char* key) const & {
     const json_value_t* cur = get_c_value();
     if (!cur || json_value_type(cur) != JSON_VALUE_OBJECT) return Json();
     const json_object_t* obj = json_value_object(cur);
@@ -708,9 +730,9 @@ inline Json Json::operator[](const char* key) const {
     return v ? Json(json_value_copy(v)) : Json();
 }
 
-inline Json Json::operator[](const std::string& key) const { return (*this)[key.c_str()]; }
+inline Json Json::operator[](const std::string& key) const & { return (*this)[key.c_str()]; }
 
-inline Json Json::operator[](size_t index) const {
+inline Json Json::operator[](size_t index) const & {
     const json_value_t* cur = get_c_value();
     if (!cur || json_value_type(cur) != JSON_VALUE_ARRAY) return Json();
     const json_array_t* arr = json_value_array(cur);
@@ -718,7 +740,7 @@ inline Json Json::operator[](size_t index) const {
     return v ? Json(json_value_copy(v)) : Json();
 }
 
-inline Json Json::operator[](int index) const { if (index < 0) return Json(); return (*this)[static_cast<size_t>(index)]; }
+inline Json Json::operator[](int index) const & { if (index < 0) return Json(); return (*this)[static_cast<size_t>(index)]; }
 
 
 #endif // JSON_H
