@@ -312,7 +312,7 @@ void test_dump_escaping() {
     std::string d = j.dump();
     // Check escapes present
     assert(d.find("\\\"") != std::string::npos); // \"
-    assert(d.find("\\\\") != std::string::npos); // \\
+    assert(d.find("\\\\") != std::string::npos); // backslash
     assert(d.find("\\n") != std::string::npos);
     assert(d.find("\\t") != std::string::npos);
     assert(d.find("\\u0001") != std::string::npos);

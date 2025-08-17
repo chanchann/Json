@@ -101,9 +101,12 @@ public:
     // Move assignment
     Json& operator=(Json&& other) noexcept {
         if (this != &other) {
-            swap(other);
-            // Destroy the old value that was swapped into 'other'
-            json_value_destroy(other.m_value);
+            // Destroy current value first
+            if (m_value) {
+                json_value_destroy(m_value);
+            }
+            // Steal the resource from other
+            m_value = other.m_value;
             other.m_value = nullptr;
         }
         return *this;
@@ -621,10 +624,8 @@ private:
                         // Insert at the requested index (which equals current size)
                         json_array_insert_from_value(arr, seg.index, newValue.get_c_value());
                     } else {
-                        // Remove old value to avoid leaks, then insert new value at same index
-                        json_value_t* removed = json_array_remove_at(arr, seg.index);
-                        if (removed) json_value_destroy(removed);
-                        json_array_insert_from_value(arr, seg.index, newValue.get_c_value());
+                        // Use optimized in-place replacement
+                        json_array_replace_from_value(arr, seg.index, newValue.get_c_value());
                     }
                     return;
                 }
@@ -641,13 +642,10 @@ private:
                 } else {
                     const json_value_t* existing = json_array_at(arr, seg.index);
                     if (json_value_type(existing) != child_type) {
-                        // Replace by index: remove at index, then insert new container at same index
-                        json_value_t* removed_old = json_array_remove_at(arr, seg.index);
-                        if (removed_old) json_value_destroy(removed_old);
+                        // Use optimized replacement for intermediate containers
                         json_value_t* tmp_child = json_value_create(child_type, NULL);
-                        const json_value_t* inserted = json_array_insert_from_value(arr, seg.index, tmp_child);
+                        existing = json_array_replace_from_value(arr, seg.index, tmp_child);
                         json_value_destroy(tmp_child);
-                        existing = inserted;
                     }
                     cur = const_cast<json_value_t*>(existing);
                 }
